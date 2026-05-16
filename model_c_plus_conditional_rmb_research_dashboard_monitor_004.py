@@ -2177,51 +2177,96 @@ try:
     print(f"positive_yearly_delta_sharpe_rate: {yearly_positive_rate:.2%}")
 except Exception as e:
     print("Could not calculate adoption decision summary:", e)
-
 # ============================================================
-# 13. SAVE OUTPUTS
+# SAVE OUTPUTS
 # ============================================================
-base_returns.to_csv(f"{BASE_PREFIX}_portfolio_daily_returns.csv", header=["portfolio_return"])
-base_rebalance.to_csv(f"{BASE_PREFIX}_rebalance_log.csv", index=False)
-save_latest(BASE_PREFIX, base_latest)
-build_alert_row(base_latest).to_csv(f"{BASE_PREFIX}_alert_dashboard.csv", index=False)
-
-rmb_returns.to_csv(f"{RMB_PREFIX}_portfolio_daily_returns.csv", header=["portfolio_return"])
-rmb_rebalance.to_csv(f"{RMB_PREFIX}_rebalance_log.csv", index=False)
-save_latest(RMB_PREFIX, rmb_latest)
-build_alert_row(rmb_latest).to_csv(f"{RMB_PREFIX}_alert_dashboard.csv", index=False)
 
 summary_df.to_csv(f"{COMPARE_PREFIX}_performance_summary.csv", index=False)
 full_compare_df.to_csv(f"{COMPARE_PREFIX}_full_period_delta.csv", index=False)
 yearly_compare_df.to_csv(f"{COMPARE_PREFIX}_yearly_robustness.csv", index=False)
-rmb_family_importance.to_csv(f"{COMPARE_PREFIX}_rmb_feature_family_importance.csv", index=False)
-rmb_diag.to_csv(f"{COMPARE_PREFIX}_latest_rmb_diagnostics.csv", index=False)
-activation_stats.to_csv(f"{COMPARE_PREFIX}_activation_stats.csv", index=False)
-macro_dashboard_df.to_csv(f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.csv", index=False)
+
+rmb_family_importance.to_csv(
+    f"{COMPARE_PREFIX}_rmb_feature_family_importance.csv",
+    index=False,
+)
+
+rmb_diag.to_csv(
+    f"{COMPARE_PREFIX}_latest_rmb_diagnostics.csv",
+    index=False,
+)
+
+activation_stats.to_csv(
+    f"{COMPARE_PREFIX}_activation_stats.csv",
+    index=False,
+)
+
+macro_dashboard_df.to_csv(
+    f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.csv",
+    index=False,
+)
+
+# ============================================================
+# GITHUB / TELEGRAM DASHBOARD COMPATIBILITY FIX
+# ============================================================
+
+dashboard_txt_main = (
+    f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.txt"
+)
+
 save_macro_dashboard_text(
     [
-        (base_latest, "BASELINE_NO_RMB_CURRENT_BEST_DASHBOARD_ONLY"),
-        (rmb_latest, "CONDITIONAL_RMB_MEDIUM_GATE_SCALED_RESEARCH_MODEL"),
+        (
+            base_latest,
+            "BASELINE_NO_RMB_CURRENT_BEST_DASHBOARD_ONLY",
+        ),
+        (
+            rmb_latest,
+            "RMB_OVERLAY_ONLY_SURGICAL_RESEARCH_MODEL",
+        ),
     ],
-    f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.txt",
+    dashboard_txt_main,
+)
+
+# Legacy filename expected by old Telegram/GitHub alert script
+dashboard_txt_legacy = (
+    "conditional_rmb_activation_test_001_macro_rmb_dashboard_monitor.txt"
+)
+
+save_macro_dashboard_text(
+    [
+        (
+            base_latest,
+            "BASELINE_NO_RMB_CURRENT_BEST_DASHBOARD_ONLY",
+        ),
+        (
+            rmb_latest,
+            "RMB_OVERLAY_ONLY_SURGICAL_RESEARCH_MODEL",
+        ),
+    ],
+    dashboard_txt_legacy,
 )
 
 print("\nSaved:")
+
 print(f"- {BASE_PREFIX}_portfolio_daily_returns.csv")
 print(f"- {BASE_PREFIX}_rebalance_log.csv")
 print(f"- {BASE_PREFIX}_latest_recommendation.csv")
 print(f"- {BASE_PREFIX}_feature_importance.csv")
 print(f"- {BASE_PREFIX}_alert_dashboard.csv")
+
 print(f"- {RMB_PREFIX}_portfolio_daily_returns.csv")
 print(f"- {RMB_PREFIX}_rebalance_log.csv")
 print(f"- {RMB_PREFIX}_latest_recommendation.csv")
 print(f"- {RMB_PREFIX}_feature_importance.csv")
 print(f"- {RMB_PREFIX}_alert_dashboard.csv")
+
 print(f"- {COMPARE_PREFIX}_performance_summary.csv")
 print(f"- {COMPARE_PREFIX}_full_period_delta.csv")
 print(f"- {COMPARE_PREFIX}_yearly_robustness.csv")
 print(f"- {COMPARE_PREFIX}_rmb_feature_family_importance.csv")
 print(f"- {COMPARE_PREFIX}_latest_rmb_diagnostics.csv")
 print(f"- {COMPARE_PREFIX}_activation_stats.csv")
+
 print(f"- {COMPARE_PREFIX}_macro_rmb_dashboard_monitor.csv")
-print(f"- {COMPARE_PREFIX}_macro_rmb_dashboard_monitor.txt")
+print(f"- {dashboard_txt_main}")
+print(f"- {dashboard_txt_legacy}")
