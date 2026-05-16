@@ -395,40 +395,83 @@ crash_pressure = (
 ).fillna(0.0).clip(-5, 5)
 
 # ============================================================
-# CONDITIONAL RMB ACTIVATION LOGIC
+# CONDITIONAL RMB ACTIVATION LOGIC - 005 MEDIUM GATE + SCALED RMB FEATURES
 # ============================================================
 # Purpose:
-#   The previous unconditional RMB test showed RMB/China-EM information was real,
-#   but it reduced performance during AI-dominant regimes.
+#   002 smooth gate was too loose and activated almost all the time.
+#   003 strict gate was too tight and almost never activated.
 #
-#   This version only lets RMB matter when the market is showing evidence of
-#   reflation / industrial broadening. This tests whether RMB helps in the
-#   regimes where professionals would actually expect it to matter.
+#   004 uses a medium-strength gate:
+#     - RMB can matter when industrial/copper/credit conditions are improving,
+#       even if they are not fully positive yet.
+#     - RMB is still suppressed when risk-off rises or SOXX dominance becomes extreme.
 #
-# Activation idea:
-#   RMB signal ON when:
-#     1) industrial/materials/copper confirmation is improving
-#     2) risk-off is not dominant
-#     3) SOXX is not so dominant that AI overwhelms the macro signal
-#
-# Values are continuous, not only 0/1, to avoid brittle threshold behavior.
+#   This keeps the test controlled: only RMB activation logic changes.
+
+def smooth_gate(x, low, high):
+    """
+    Converts a continuous signal into a 0..1 activation weight.
+    Below low  => 0
+    Above high => 1
+    Between    => linear transition
+    """
+    return ((x - low) / (high - low)).clip(0.0, 1.0)
+
+# Medium broadening gate.
+# Softer than 003 strict gate, stricter than 002 always-on smooth gate.
+industrial_gate = np.clip(
+    (industrial_strength + 0.50) / 1.50,
+    0.0,
+    1.0,
+)
+
+copper_gate = np.clip(
+    (copper_strength + 0.50) / 1.50,
+    0.0,
+    1.0,
+)
+
+credit_gate = np.clip(
+    (credit_strength + 0.75) / 1.50,
+    0.0,
+    1.0,
+)
+
+materials_gate = np.clip(
+    (materials_strength + 0.50) / 1.50,
+    0.0,
+    1.0,
+)
+
+# Strong USD suppresses EM liquidity.
+# If USD strength is low/negative, this gives support; if USD is very strong, support fades.
+usd_suppression = np.clip(
+    (1.0 - usd_3m_strength) / 1.5,
+    0.0,
+    1.0,
+)
+
+# Keep this variable name because the feature builder and dashboard expect it.
 industrial_broadening_gate = (
-    0.40 * (industrial_strength > 0.25).astype(float)
-    + 0.25 * (materials_strength > 0.25).astype(float)
-    + 0.25 * (copper_strength > 0.25).astype(float)
-    + 0.10 * (credit_strength > -0.50).astype(float)
-).fillna(0.0)
+    0.30 * industrial_gate
+    + 0.30 * copper_gate
+    + 0.20 * credit_gate
+    + 0.20 * materials_gate
+).fillna(0.0).clip(0.0, 1.0)
 
-# Penalize if AI/SOXX dominance is extremely strong or risk-off is rising.
-# In that environment the previous test showed RMB can dilute the TQQQ engine.
+# Risk-off should be the main penalty.
+# SOXX penalty is mild: strong semis alone should not fully suppress China/EM liquidity.
 rmb_activation_penalty = (
-    0.50 * (soxx_strength > 2.00).astype(float)
-    + 0.50 * (risk_off_strength > 0.75).astype(float)
-).fillna(0.0)
+    0.20 * smooth_gate(soxx_strength, 2.50, 3.00)
+    + 0.80 * smooth_gate(risk_off_strength, 0.50, 1.50)
+).fillna(0.0).clip(0.0, 1.0)
 
-rmb_activation_gate = (industrial_broadening_gate - rmb_activation_penalty).clip(0.0, 1.0)
+# Final medium activation gate.
+rmb_activation_gate = (
+    (0.85 * industrial_broadening_gate + 0.15 * usd_suppression)
+    * (1.0 - rmb_activation_penalty)
+).fillna(0.0).clip(0.0, 1.0)
 
-# This is the actual conditional RMB signal used by the challenger.
 conditional_china_em_liquidity_strength = (
     china_em_liquidity_strength * rmb_activation_gate
 ).fillna(0.0).clip(-3, 3)
@@ -583,19 +626,52 @@ def build_features_by_asset(sector_etfs: list, include_rmb_features: bool = Fals
             # CONDITIONAL RMB / China-EM liquidity features.
             # Baseline remains unchanged. The challenger receives RMB information only
             # after it is gated by industrial/copper/materials broadening.
-            df["rmb_activation_gate"] = rmb_activation_gate
+            #
+            # IMPORTANT: RMB features are deliberately scaled down.
+            # Previous tests showed rmb_activation_gate became too dominant in RF
+            # feature importance and hurt portfolio ranking during AI-led regimes.
+            RMB_FEATURE_SCALE = 0.25
+
+            df["rmb_activation_gate"] = (
+                RMB_FEATURE_SCALE * rmb_activation_gate
+            )
+
+            # Keep industrial_broadening_gate unscaled for diagnostics/model context.
             df["industrial_broadening_gate"] = industrial_broadening_gate
-            df["conditional_rmb_strength"] = conditional_rmb_strength
-            df["conditional_rmb_3m_strength"] = conditional_rmb_3m_strength
-            df["conditional_china_em_liquidity_strength"] = conditional_china_em_liquidity_strength
+
+            df["conditional_rmb_strength"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_strength
+            )
+
+            df["conditional_rmb_3m_strength"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_3m_strength
+            )
+
+            df["conditional_china_em_liquidity_strength"] = (
+                RMB_FEATURE_SCALE * conditional_china_em_liquidity_strength
+            )
 
             # Asset-specific interaction terms.
             # XSOE should be most sensitive; XLB/XLI may benefit in reflation regimes.
-            df["conditional_rmb_XSOE"] = conditional_rmb_strength * is_XSOE
-            df["conditional_rmb_3m_XSOE"] = conditional_rmb_3m_strength * is_XSOE
-            df["conditional_china_em_liquidity_XSOE"] = conditional_china_em_liquidity_strength * is_XSOE
-            df["conditional_rmb_XLB"] = conditional_rmb_strength * is_XLB
-            df["conditional_rmb_XLI"] = conditional_rmb_strength * is_XLI
+            df["conditional_rmb_XSOE"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_strength * is_XSOE
+            )
+
+            df["conditional_rmb_3m_XSOE"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_3m_strength * is_XSOE
+            )
+
+            df["conditional_china_em_liquidity_XSOE"] = (
+                RMB_FEATURE_SCALE * conditional_china_em_liquidity_strength * is_XSOE
+            )
+
+            df["conditional_rmb_XLB"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_strength * is_XLB
+            )
+
+            df["conditional_rmb_XLI"] = (
+                RMB_FEATURE_SCALE * conditional_rmb_strength * is_XLI
+            )
 
         df["target"] = px.shift(-forward_return_days) / px - 1.0
         features_by_asset[asset] = df
@@ -665,6 +741,13 @@ def apply_regime_overlay(raw_preds: dict, date: pd.Timestamp, sector_etfs: list,
     credit_regime = val(credit_strength)
     divergence = val(tech_real_economy_divergence)
     crash = val(crash_pressure)
+
+    # RMB dashboard / overlay-only data.
+    # These are NOT used as RF prediction features in this overlay-only model.
+    rmb_cond = val(conditional_rmb_strength)
+    rmb_liq_cond = val(conditional_china_em_liquidity_strength)
+    rmb_gate_now = val(rmb_activation_gate)
+    industrial_broad_gate_now = val(industrial_broadening_gate)
 
     # Conditional SOXX/QQQM breakdown data.
     soxx_5d_now = val(soxx_5d)
@@ -761,7 +844,7 @@ def apply_regime_overlay(raw_preds: dict, date: pd.Timestamp, sector_etfs: list,
             if risk_off_pos > 0:
                 add("XLI", -scale * 0.80 * risk_off_pos)
 
-    elif overlay_style in ("v2", "hybrid"):
+    elif overlay_style in ("v2", "hybrid", "rmb_overlay"):
         # V2 philosophy:
         # - XLB should be boosted only when materials/copper strength is confirmed.
         # - XLI should be boosted only when industrial strength is positive AND risk-off is not dominant.
@@ -794,7 +877,7 @@ def apply_regime_overlay(raw_preds: dict, date: pd.Timestamp, sector_etfs: list,
 
         # HYBRID extra: preserve fast-growth tech/TQQQ engine when semis + QQQM leadership are very strong.
         # This prevents XLI/XLB from diluting the original tech engine unless industrial/materials signals are truly active.
-        if overlay_style == "hybrid":
+        if overlay_style in ("hybrid", "rmb_overlay"):
             tech_regime_on = (growth > 1.00) and (soxx > 1.00) and (risk_off < 0.50)
             industrial_regime_on_h = (industrial > 0.50) and (copper3 > 0.25) and (risk_off < 0.75) and (usd_regime < 1.25)
             materials_regime_on_h = (materials > 0.50) and (copper3 > 0.50) and (risk_off < 0.90)
@@ -817,6 +900,34 @@ def apply_regime_overlay(raw_preds: dict, date: pd.Timestamp, sector_etfs: list,
             if oil_regime > 0.5 or industrial > 0.5:
                 add("QQQM", -scale * 0.8 * max(oil_regime, industrial))
 
+            # ============================================================
+            # RMB / EM REFLATION OVERLAY ONLY - SURGICAL TEST 006
+            # ============================================================
+            # RMB is allowed to nudge allocation ONLY when the broader macro
+            # regime confirms EM/reflation: industrials, copper, credit, and USD.
+            # This avoids letting RMB dominate the RF prediction layer.
+            if overlay_style == "rmb_overlay":
+                rmb_reflation_on = (
+                    rmb_cond > 0.50
+                    and industrial > 0.50
+                    and copper > 0.50
+                    and credit_regime > -0.25
+                    and usd_regime < 0.75
+                    and risk_off < 0.75
+                )
+
+                if rmb_reflation_on:
+                    # Tiny, surgical nudges only. Keep original AI engine dominant.
+                    add("XSOE", scale * 0.25 * rmb_cond)
+
+                    if "XLI" in sector_etfs:
+                        add("XLI", scale * 0.15 * industrial_pos)
+
+                    if "XLB" in sector_etfs:
+                        add("XLB", scale * 0.15 * copper_pos)
+
+                    add("QQQM", -scale * 0.15 * rmb_cond)
+
     else:
         raise ValueError(f"Unknown overlay_style: {overlay_style}")
 
@@ -834,6 +945,19 @@ def apply_regime_overlay(raw_preds: dict, date: pd.Timestamp, sector_etfs: list,
         "credit_strength": credit_regime,
         "tech_real_economy_divergence": divergence,
         "crash_pressure": crash,
+        "conditional_rmb_strength": rmb_cond,
+        "conditional_china_em_liquidity_strength": rmb_liq_cond,
+        "rmb_activation_gate": rmb_gate_now,
+        "industrial_broadening_gate": industrial_broad_gate_now,
+        "rmb_reflation_overlay_on": bool(
+            overlay_style == "rmb_overlay"
+            and rmb_cond > 0.50
+            and industrial > 0.50
+            and copper > 0.50
+            and credit_regime > -0.25
+            and usd_regime < 0.75
+            and risk_off < 0.75
+        ),
         "soxx_5d": soxx_5d_now,
         "soxx_10d": soxx_10d_now,
         "soxx_dd_21": soxx_dd_21_now,
@@ -1905,14 +2029,14 @@ def summarize_feature_family_importance(feature_importance_df: pd.DataFrame, fam
 # 12. RUN CONTROLLED BASELINE VS CONDITIONAL RMB CHALLENGER TEST
 # ============================================================
 BASE_PREFIX = "model_c_plus_current_best_baseline_no_rmb"
-RMB_PREFIX = "model_c_plus_conditional_rmb_activation_test_001"
-COMPARE_PREFIX = "conditional_rmb_activation_test_001"
+RMB_PREFIX = "model_c_plus_rmb_overlay_only_surgical_test_006"
+COMPARE_PREFIX = "rmb_overlay_only_surgical_test_006"
 
 print("\nBuilding BASELINE feature set: current best, no RMB features...")
 baseline_features = build_features_by_asset(UPGRADED_SECTOR_ETFS, include_rmb_features=False)
 
-print("\nBuilding CONDITIONAL RMB CHALLENGER feature set: current best + CONDITIONAL RMB activation features...")
-rmb_features = build_features_by_asset(UPGRADED_SECTOR_ETFS, include_rmb_features=True)
+print("\nBuilding RMB OVERLAY-ONLY feature set: current best features only, no RMB RF features...")
+rmb_features = build_features_by_asset(UPGRADED_SECTOR_ETFS, include_rmb_features=False)
 
 print("\nRunning BASELINE current best model...")
 base_returns, base_rebalance, base_turnover = run_strategy(
@@ -1925,10 +2049,10 @@ base_returns, base_rebalance, base_turnover = run_strategy(
 
 print("\nRunning CONDITIONAL RMB CHALLENGER model...")
 rmb_returns, rmb_rebalance, rmb_turnover = run_strategy(
-    "CONDITIONAL_RMB_ACTIVATOR_001",
+    "RMB_OVERLAY_ONLY_SURGICAL_006",
     UPGRADED_SECTOR_ETFS,
     rmb_features,
-    overlay_style="hybrid",
+    overlay_style="rmb_overlay",
     tqqq_style="dynamic",
 )
 
@@ -1939,7 +2063,7 @@ if len(rmb_returns) == 0:
 
 summary_df = pd.DataFrame([
     performance_summary("BASELINE_NO_RMB_CURRENT_BEST", base_returns, base_turnover),
-    performance_summary("CONDITIONAL_RMB_ACTIVATOR_001", rmb_returns, rmb_turnover),
+    performance_summary("RMB_OVERLAY_ONLY_SURGICAL_006", rmb_returns, rmb_turnover),
 ])
 
 full_compare_df = compare_two_models(base_returns, rmb_returns)
@@ -1965,10 +2089,10 @@ base_latest = get_latest_recommendation(
 base_latest = apply_v2_continuous_tqqq_alert(base_latest)
 
 rmb_latest = get_latest_recommendation(
-    "CONDITIONAL_RMB_ACTIVATOR_001",
+    "RMB_OVERLAY_ONLY_SURGICAL_006",
     UPGRADED_SECTOR_ETFS,
     rmb_features,
-    overlay_style="hybrid",
+    overlay_style="rmb_overlay",
     tqqq_style="dynamic",
 )
 rmb_latest = apply_v2_continuous_tqqq_alert(rmb_latest)
@@ -1979,7 +2103,7 @@ print_macro_regime_dashboard(base_latest, "BASELINE_NO_RMB_CURRENT_BEST_DASHBOAR
 
 print_latest(rmb_latest, UPGRADED_SECTOR_ETFS)
 print_alert_dashboard(rmb_latest)
-print_macro_regime_dashboard(rmb_latest, "CONDITIONAL_RMB_ACTIVATOR_RESEARCH_MODEL")
+print_macro_regime_dashboard(rmb_latest, "CONDITIONAL_RMB_MEDIUM_GATE_SCALED_RESEARCH_MODEL")
 
 base_macro_dashboard_df = build_macro_regime_dashboard_row(
     base_latest,
@@ -1987,7 +2111,7 @@ base_macro_dashboard_df = build_macro_regime_dashboard_row(
 )
 rmb_macro_dashboard_df = build_macro_regime_dashboard_row(
     rmb_latest,
-    "CONDITIONAL_RMB_ACTIVATOR_RESEARCH_MODEL",
+    "CONDITIONAL_RMB_MEDIUM_GATE_SCALED_RESEARCH_MODEL",
 )
 macro_dashboard_df = pd.concat(
     [base_macro_dashboard_df, rmb_macro_dashboard_df],
@@ -2077,7 +2201,7 @@ macro_dashboard_df.to_csv(f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.csv", i
 save_macro_dashboard_text(
     [
         (base_latest, "BASELINE_NO_RMB_CURRENT_BEST_DASHBOARD_ONLY"),
-        (rmb_latest, "CONDITIONAL_RMB_ACTIVATOR_RESEARCH_MODEL"),
+        (rmb_latest, "CONDITIONAL_RMB_MEDIUM_GATE_SCALED_RESEARCH_MODEL"),
     ],
     f"{COMPARE_PREFIX}_macro_rmb_dashboard_monitor.txt",
 )
